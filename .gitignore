@@ -1,0 +1,39 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Database dumps and backups
+*.sql
+*.sql.gz
+*.dump
+*.bak
+
+# Local app runtime data
+logs/
+logs/**
+storage/
+storage/**
+cache/
+cache/**
+tmp/
+tmp/**
+*.log
+
+# Uploaded/private content
+public/uploads/
+assets/uploads/
+**/uploads/
+storage/exports/
+storage/logs/
+storage/cache/
+storage/tmp/
+
+# Composer and IDE metadata
+vendor/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

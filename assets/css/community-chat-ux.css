@@ -1,0 +1,133 @@
+.community-message-action-menu,
+.community-reaction-picker {
+    position: fixed;
+    z-index: 1100;
+    min-width: 220px;
+    border-radius: 1rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.community-message-action-menu.d-none,
+.community-reaction-picker.d-none {
+    display: none;
+}
+
+.community-message-action-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.community-message-action-menu .action-item {
+    display: block;
+    width: 100%;
+    padding: 0.9rem 1rem;
+    border: none;
+    text-align: left;
+    border-radius: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    background: transparent;
+    transition: background 0.18s ease;
+    cursor: pointer;
+}
+
+.community-message-action-menu .action-item:hover,
+.community-message-action-menu .action-item.action-close:hover {
+    background: rgba(132, 204, 22, 0.12);
+}
+
+.community-message-action-menu .action-item {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.community-message-action-menu .action-item svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.community-reaction-picker {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(42px, 1fr));
+    gap: 0.45rem;
+    padding: 0.7rem;
+}
+
+.reaction-action-btn {
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 0.8rem;
+    font-size: 1.1rem;
+    padding: 0.65rem;
+    background: #fff;
+    cursor: pointer;
+    transition: transform 0.15s ease, background 0.18s ease;
+}
+
+.reaction-action-btn:hover {
+    transform: translateY(-1px);
+    background: #f7fdf6;
+}
+
+.community-reply-preview {
+    border-left: 4px solid rgba(132, 204, 22, 0.55);
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.8rem;
+    border-radius: 1rem;
+    background: rgba(245, 253, 242, 0.95);
+}
+
+.community-inline-editor {
+    min-width: min(34rem, 70vw);
+    resize: vertical;
+}
+
+.community-edit-controls {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
+}
+
+.community-reply-preview .reply-label {
+    display: block;
+    font-size: 0.82rem;
+    color: rgba(15, 23, 42, 0.65);
+    margin-bottom: 0.35rem;
+    font-weight: 700;
+}
+
+.community-reply-preview p {
+    margin: 0;
+    line-height: 1.5;
+    color: rgba(15, 23, 42, 0.8);
+}
+
+#communityReplyPreview {
+    display: none;
+    margin-top: 1rem;
+}
+
+#communityReplyPreview.d-none {
+    display: none;
+}
+
+.message-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-top: 0.55rem;
+}
+
+.reaction-pill {
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 0.85rem;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 0.4rem 0.7rem;
+    font-size: 0.95rem;
+    cursor: default;
+}
