@@ -20,6 +20,7 @@ if (!$elec) {
     require_once dirname(__DIR__, 2) . '/templates/footer.php';
     exit;
 }
+  $ballotLocked = $election->isBallotLocked($electionId);
 
 $uploadDir = dirname(__DIR__, 2) . '/assets/uploads/candidates';
 if (!is_dir($uploadDir)) {
@@ -35,7 +36,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $csrfValid = false;
     }
 
-  $action = $csrfValid ? ($_POST['action'] ?? '') : '';
+  $action = $csrfValid && !$ballotLocked ? ($_POST['action'] ?? '') : '';
+  if ($csrfValid && $ballotLocked) {
+    $errors[] = 'Candidate changes are locked because voting has started or this election already contains votes.';
+  }
     
     if ($action === 'add_candidate') {
         $studentId = (int)($_POST['student_id'] ?? 0);
@@ -92,8 +96,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'delete_candidate') {
         $deleteId = (int)($_POST['candidate_id'] ?? 0);
         if ($deleteId > 0) {
-            $election->deleteCandidate($deleteId, $electionId);
-            $success = 'Candidate removed.';
+            if ($election->deleteCandidate($deleteId, $electionId)) {
+              $success = 'Candidate removed.';
+            } else {
+              $errors[] = 'Candidate could not be removed. It may have recorded votes or the ballot is locked.';
+            }
         } else {
             $errors[] = 'Invalid candidate selected for removal.';
         }
@@ -120,6 +127,10 @@ $students = $pdo->query("SELECT id, full_name, matric_number, email FROM users W
         <a href="<?= APP_URL ?>/admin/elections.php?action=view&id=<?= $electionId ?>" class="btn btn-outline-secondary btn-sm"><i data-lucide="arrow-left"></i> Back</a>
       </div>
 
+      <?php if ($ballotLocked): ?>
+        <div class="alert alert-warning">Candidate approvals and records are locked after voting starts to protect ballot integrity.</div>
+      <?php endif; ?>
+
       <?php if ($success): ?>
         <div class="alert alert-success alert-dismissible fade show" role="alert">
           <?= e($success) ?>
@@ -137,6 +148,7 @@ $students = $pdo->query("SELECT id, full_name, matric_number, email FROM users W
       <?php endif; ?>
 
       <div class="row g-4 mb-4">
+        <?php if (!$ballotLocked): ?>
         <div class="col-lg-5">
           <div class="glass-card p-4">
             <h5 class="fw-bold mb-3">Register Candidate</h5>
@@ -172,6 +184,7 @@ $students = $pdo->query("SELECT id, full_name, matric_number, email FROM users W
             </form>
           </div>
         </div>
+        <?php endif; ?>
 
         <div class="col-lg-7">
           <div class="glass-card p-4">
@@ -196,7 +209,7 @@ $students = $pdo->query("SELECT id, full_name, matric_number, email FROM users W
                         <td>
                           <div class="btn-group btn-group-sm">
                             <a href="<?= APP_URL ?>/admin/elections/candidates.php?election_id=<?= $electionId ?>&view=<?= (int)$cand['id'] ?>" class="btn btn-outline-primary">View</a>
-                            <form method="POST" class="d-inline">
+                            <?php if (!$ballotLocked): ?><form method="POST" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                                 <input type="hidden" name="action" value="toggle_approval">
                                 <input type="hidden" name="candidate_id" value="<?= (int)$cand['id'] ?>">
@@ -210,7 +223,7 @@ $students = $pdo->query("SELECT id, full_name, matric_number, email FROM users W
                                 <input type="hidden" name="action" value="delete_candidate">
                                 <input type="hidden" name="candidate_id" value="<?= (int)$cand['id'] ?>">
                                 <button type="submit" class="btn btn-outline-danger">Remove</button>
-                            </form>
+                            </form><?php endif; ?>
                           </div>
                         </td>
                       </tr>

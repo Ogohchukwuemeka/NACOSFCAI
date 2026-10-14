@@ -49,7 +49,8 @@ try {
 // 2) Post-election results: elections that ended in the last 2 hours
 $log('Checking for recently concluded elections for post results distribution...');
 try {
-    $stmt = $pdo->prepare("SELECT * FROM elections WHERE end_time <= NOW() AND end_time >= DATE_SUB(NOW(), INTERVAL 2 HOUR)");
+    $election->refreshAllElectionStatuses();
+    $stmt = $pdo->prepare("SELECT * FROM elections WHERE status = 'closed' AND end_time <= NOW() AND end_time >= DATE_SUB(NOW(), INTERVAL 2 HOUR)");
     $stmt->execute();
     $recent = $stmt->fetchAll();
     foreach ($recent as $ele) {

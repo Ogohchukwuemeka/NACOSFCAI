@@ -11,7 +11,14 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
     <link rel="stylesheet" href="<?= asset('css/style.css') ?>">
     <link rel="stylesheet" href="<?= asset('css/community-chat-ux.css') ?>">
-    <script>window.APP_URL = '<?= APP_URL ?>'; window.CSRF_TOKEN = '<?= e(csrf_token()) ?>';</script>
+    <script>
+        window.APP_URL = <?= json_encode(APP_URL, JSON_UNESCAPED_SLASHES) ?>;
+        window.CSRF_TOKEN = <?= json_encode(csrf_token()) ?>;
+        window.NACOS_IDLE_TIMEOUT_MS = <?= !empty($_SESSION['user_role']) ? (int)$sessionTimeout * 1000 : 0 ?>;
+        window.NACOS_LAST_ACTIVITY_MS = <?= !empty($_SESSION['user_role']) ? (int)($_SESSION['last_activity'] ?? time()) * 1000 : 0 ?>;
+        window.NACOS_ACTIVITY_URL = <?= json_encode(APP_URL . '/api/session-activity.php', JSON_UNESCAPED_SLASHES) ?>;
+        window.NACOS_TIMEOUT_URL = <?= json_encode(APP_URL . '/student/logout.php?timeout=1', JSON_UNESCAPED_SLASHES) ?>;
+    </script>
 </head>
 <?php
     $currentPath = $_SERVER['PHP_SELF'] ?? '';

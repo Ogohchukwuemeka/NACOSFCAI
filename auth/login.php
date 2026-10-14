@@ -1,17 +1,17 @@
 <?php require_once dirname(__DIR__) . '/templates/header.php'; ?>
 <?php
 $errors = [];
-$loginError = $_SESSION['login_error'] ?? null;
+$loginError = $_SESSION['login_error'] ?? (($_GET['timeout'] ?? '') === '1' ? 'Your session expired due to inactivity. Please log in again.' : null);
 unset($_SESSION['login_error']);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         verify_csrf();
         $auth = new Auth(Database::getInstance());
-        $ok = $auth->login($_POST['identifier'] ?? '', $_POST['password'] ?? '', 'student');
+        $ok = $auth->login($_POST['identifier'] ?? '', $_POST['password'] ?? '');
         if ($ok) {
-            redirect('student/dashboard.php');
+            redirect(($_SESSION['user_role'] ?? '') === 'admin' ? 'admin/dashboard.php' : 'student/dashboard.php');
         }
-        $errors[] = $_SESSION['login_error'] ?? $loginError ?: 'Invalid student credentials.';
+        $errors[] = $_SESSION['login_error'] ?? $loginError ?: 'Invalid email/matric number or password.';
         unset($_SESSION['login_error']);
     } catch (Exception $e) {
         $errors[] = $e->getMessage();
@@ -26,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="text-center mb-4">
                         <img src="<?= asset('images/logo/nacos-logo.jpeg') ?>" alt="nacos-logo" class="brand-logo mb-3">
                         <h3 class="fw-bold">Welcome Back</h3>
-                        <p class="text-secondary">Sign in to your NACOSFCAIshiagu dashboard.</p>
+                        <p class="text-secondary">Sign in to continue to your NACOSFCAI portal.</p>
                     </div>
                     <?php foreach ($errors as $error): ?>
                         <div class="alert alert-danger"><?= e($error) ?></div>
@@ -35,11 +35,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                         <div class="mb-3">
                             <label class="form-label">Email or Matric Number</label>
-                            <input type="text" name="identifier" class="form-control" required>
+                            <input type="text" name="identifier" class="form-control" autocomplete="username" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Password</label>
-                            <input type="password" name="password" class="form-control" required>
+                            <input type="password" name="password" class="form-control" autocomplete="current-password" required>
                         </div>
                         <button type="submit" class="btn btn-primary w-100">Login</button>
                         <div class="text-center mt-3">

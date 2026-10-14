@@ -21,6 +21,7 @@ if (!$elec) {
     require_once dirname(__DIR__, 2) . '/templates/footer.php';
     exit;
 }
+  $ballotLocked = $election->isBallotLocked($electionId);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $csrfValid = true;
@@ -31,7 +32,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $csrfValid = false;
     }
 
-  $action = $csrfValid ? ($_POST['action'] ?? '') : '';
+  $action = $csrfValid && !$ballotLocked ? ($_POST['action'] ?? '') : '';
+  if ($csrfValid && $ballotLocked) {
+    $errors[] = 'Position changes are locked because voting has started or this election already contains votes.';
+  }
 
     if ($action === 'save_position') {
         $positionName = trim($_POST['position_name'] ?? '');
@@ -44,13 +48,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             if ($editId) {
-                $election->updatePosition($editId, [
+              if (!$election->updatePosition($editId, [
                     'position_name' => $positionName,
                     'description' => $description,
                     'display_order' => $displayOrder,
-                ], $electionId);
+              ], $electionId)) {
+                $errors[] = 'Position could not be updated; verify it belongs to this election and the ballot is not locked.';
+              } else {
                 $success = 'Position updated successfully.';
                 $editId = 0;
+              }
             } else {
                 $election->createPosition([
                     'election_id' => $electionId,
@@ -63,14 +70,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif ($action === 'delete_position') {
         $deleteId = (int)($_POST['position_id'] ?? 0);
-        if ($deleteId > 0) {
-            $election->deletePosition($deleteId, $electionId);
+        if ($deleteId > 0 && $election->deletePosition($deleteId, $electionId)) {
             $success = 'Position deleted.';
             if ($editId === $deleteId) {
                 $editId = 0;
             }
         } else {
-            $errors[] = 'Invalid position selected for deletion.';
+          $errors[] = 'Position could not be deleted; verify it belongs to this election and the ballot is not locked.';
         }
     }
 }
@@ -96,6 +102,10 @@ if ($editPosition && (int)$editPosition['election_id'] !== $electionId) {
         <a href="<?= APP_URL ?>/admin/elections.php?action=view&id=<?= $electionId ?>" class="btn btn-outline-secondary btn-sm"><i data-lucide="arrow-left"></i> Back</a>
       </div>
 
+      <?php if ($ballotLocked): ?>
+        <div class="alert alert-warning">Positions are locked after voting starts to protect the ballot and preserve results.</div>
+      <?php endif; ?>
+
       <?php if ($success): ?>
         <div class="alert alert-success alert-dismissible fade show" role="alert">
           <?= e($success) ?>
@@ -113,7 +123,7 @@ if ($editPosition && (int)$editPosition['election_id'] !== $electionId) {
       <?php endif; ?>
 
       <div class="row g-4 mb-4">
-        <div class="col-lg-6">
+        <?php if (!$ballotLocked): ?><div class="col-lg-6">
           <div class="glass-card p-4">
             <h5 class="fw-bold mb-3"><?= $editPosition ? 'Edit Position' : 'Create New Position' ?></h5>
             <form method="POST">
@@ -139,7 +149,7 @@ if ($editPosition && (int)$editPosition['election_id'] !== $electionId) {
               </div>
             </form>
           </div>
-        </div>
+        </div><?php endif; ?>
 
         <div class="col-lg-6">
           <div class="glass-card p-4">
@@ -154,7 +164,7 @@ if ($editPosition && (int)$editPosition['election_id'] !== $electionId) {
                       <div class="fw-bold"><?= e((string)($pos['position_name'] ?? '—')) ?></div>
                       <small class="text-secondary"><?= e(substr((string)($pos['description'] ?? ''), 0, 60)) ?></small>
                     </div>
-                    <div class="btn-group btn-group-sm">
+                    <?php if (!$ballotLocked): ?><div class="btn-group btn-group-sm">
                       <a href="<?= APP_URL ?>/admin/elections/positions.php?election_id=<?= $electionId ?>&edit=<?= (int)$pos['id'] ?>" class="btn btn-outline-primary">Edit</a>
                       <form method="POST" class="d-inline" onsubmit="return confirm('Delete this position?');">
                           <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
@@ -162,7 +172,7 @@ if ($editPosition && (int)$editPosition['election_id'] !== $electionId) {
                           <input type="hidden" name="position_id" value="<?= (int)$pos['id'] ?>">
                           <button type="submit" class="btn btn-outline-danger">Delete</button>
                       </form>
-                    </div>
+                    </div><?php endif; ?>
                   </div>
                 <?php endforeach; ?>
               </div>

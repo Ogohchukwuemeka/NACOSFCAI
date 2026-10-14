@@ -117,6 +117,23 @@ function getGalleryCategory(string $title): string
     return 'All';
 }
 
+function isValidGooglePhotosAlbumUrl(string $url): bool
+{
+    if ($url === '' || strlen($url) > 2048 || preg_match('/[\x00-\x20\\\\]/', $url) || filter_var($url, FILTER_VALIDATE_URL) === false) {
+        return false;
+    }
+
+    $parts = parse_url($url);
+    if (!is_array($parts) || strtolower($parts['scheme'] ?? '') !== 'https' || !empty($parts['user']) || !empty($parts['pass'])) {
+        return false;
+    }
+
+    $host = strtolower(rtrim((string)($parts['host'] ?? ''), '.'));
+    return in_array($host, ['photos.google.com', 'photos.app.goo.gl'], true)
+        && !empty($parts['path'])
+        && (!isset($parts['port']) || (int)$parts['port'] === 443);
+}
+
 function isActive(string $page): bool
 {
     return basename($_SERVER['PHP_SELF']) === $page;

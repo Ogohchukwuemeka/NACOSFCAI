@@ -5,6 +5,7 @@
 
 # Database dumps and backups
 *.sql
+!database_migrations/election_integrity.sql
 *.sql.gz
 *.dump
 *.bak

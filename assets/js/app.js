@@ -120,6 +120,84 @@ document.addEventListener('DOMContentLoaded', function () {
         AOS.init({ duration: 700, once: true });
     }
 
+    const idleTimeoutMs = Number(window.NACOS_IDLE_TIMEOUT_MS || 0);
+    if (idleTimeoutMs > 0 && window.NACOS_TIMEOUT_URL) {
+        const activityStorageKey = 'nacos_last_user_activity';
+        let lastActivity = Number(window.NACOS_LAST_ACTIVITY_MS || Date.now());
+        let lastPingAt = 0;
+        let idleTimer = null;
+        try {
+            lastActivity = Math.max(lastActivity, Number(localStorage.getItem(activityStorageKey) || 0));
+            localStorage.setItem(activityStorageKey, String(lastActivity));
+        } catch (e) {
+            // The server-side timeout remains authoritative if browser storage is unavailable.
+        }
+
+        const scheduleIdleLogout = function () {
+            clearTimeout(idleTimer);
+            const remaining = idleTimeoutMs - (Date.now() - lastActivity);
+            if (remaining <= 0) {
+                window.location.replace(window.NACOS_TIMEOUT_URL);
+                return;
+            }
+            idleTimer = setTimeout(function () {
+                window.location.replace(window.NACOS_TIMEOUT_URL);
+            }, remaining);
+        };
+
+        const recordUserActivity = function () {
+            const now = Date.now();
+            if (now - lastActivity < 1000) {
+                return;
+            }
+            lastActivity = now;
+            try {
+                localStorage.setItem(activityStorageKey, String(now));
+            } catch (e) {
+                // Keep the current-tab timer working without browser storage.
+            }
+            scheduleIdleLogout();
+        };
+
+        ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(function (eventName) {
+            window.addEventListener(eventName, recordUserActivity, { passive: true });
+        });
+
+        window.addEventListener('storage', function (event) {
+            if (event.key === activityStorageKey) {
+                const otherTabActivity = Number(event.newValue || 0);
+                if (otherTabActivity > lastActivity) {
+                    lastActivity = otherTabActivity;
+                    scheduleIdleLogout();
+                }
+            }
+        });
+
+        setInterval(async function () {
+            const now = Date.now();
+            if (now - lastActivity >= 45000 || now - lastPingAt < 25000 || !window.NACOS_ACTIVITY_URL) {
+                return;
+            }
+            lastPingAt = now;
+            try {
+                const response = await fetch(window.NACOS_ACTIVITY_URL, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'X-CSRF-Token': window.CSRF_TOKEN || '' }
+                });
+                if (response.redirected) {
+                    window.location.replace(response.url);
+                } else if (response.status === 401 || response.status === 403) {
+                    window.location.replace(window.NACOS_TIMEOUT_URL);
+                }
+            } catch (e) {
+                // A temporary network error must not log out an otherwise active user.
+            }
+        }, 30000);
+
+        scheduleIdleLogout();
+    }
+
     const navbar = document.querySelector('.navbar-glass');
     if (navbar) {
         const toggleNavbar = () => {
@@ -525,14 +603,19 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     const addAssistantMessage = function (text, type) {
+        if (!assistantMessages) {
+            return;
+        }
+
         const message = document.createElement('div');
         message.className = 'assistant-message assistant-message-' + type;
         const content = document.createElement('div');
         content.className = 'assistant-message-content';
         const paragraph = document.createElement('p');
-        text.split('\n').forEach(function (line, index) {
+        const lines = String(text || '').split('\n');
+        lines.forEach(function (line, index) {
             paragraph.appendChild(document.createTextNode(line));
-            if (index < text.split('\n').length - 1) {
+            if (index < lines.length - 1) {
                 paragraph.appendChild(document.createElement('br'));
             }
         });
@@ -554,44 +637,37 @@ document.addEventListener('DOMContentLoaded', function () {
         assistantStatus.hidden = !isTyping;
     };
 
-    const sendAssistantQuery = function (text) {
-        if (!text || !assistantMessages) {
+    const sendAssistantQuery = async function (text) {
+        const value = String(text || '').trim();
+        if (!value || !assistantMessages) {
             return;
         }
-        addAssistantMessage(text, 'user');
-        assistantInput.value = '';
+
+        addAssistantMessage(value, 'user');
+        if (assistantInput) {
+            assistantInput.value = '';
+        }
+
         setAssistantTyping(true);
-        setTimeout(function () {
-            setAssistantTyping(false);
-            const lower = text.trim().toLowerCase();
-            let reply = '';
-            if (lower.includes('register')) {
-                reply = 'To register, visit the registration page, complete your profile, and follow the instructions for membership.';
-            } else if (lower.includes('pay') || lower.includes('dues') || lower.includes('payment')) {
-                reply = 'To pay dues, use the student dashboard payments section. Upload proof if required and wait for verification.';
-            } else if (lower.includes('id card')) {
-                reply = 'Your ID card can be generated from the student dashboard once your payments are approved and profile is complete.';
-            } else if (lower.includes('support')) {
-                reply = 'Contact support via the support page. Provide details and our team will respond shortly.';
-            } else if (lower.includes('certificate')) {
-                reply = 'Your certificate can be generated from the student dashboard once your NACOS dues is approved and profile is complete.';
-            } else {
-                reply = 'Sorry, I couldn\'t answer that question. Leave your message and an administrator will respond shortly.';
-            }
+
+        try {
+            const response = await fetch((window.APP_URL || '') + '/api/assistant_message.php', {
+                method: 'POST',
+                headers: Object.assign(
+                    { 'Content-Type': 'application/json' },
+                    window.CSRF_TOKEN ? { 'X-CSRF-Token': window.CSRF_TOKEN } : {}
+                ),
+                body: JSON.stringify({ name: 'Guest', email: '', message: value })
+            });
+
+            const payload = await response.json();
+            const reply = payload && payload.ok && payload.reply ? payload.reply : 'I am having trouble answering that right now. Please try again in a moment or open a support ticket.';
             addAssistantMessage(reply, 'bot');
-            // Persist visitor question for admin review
-            try {
-                fetch(('/api/assistant_message.php'), {
-                    method: 'POST',
-                    headers: Object.assign({ 'Content-Type': 'application/json' }, window.CSRF_TOKEN ? { 'X-CSRF-Token': window.CSRF_TOKEN } : {}),
-                    body: JSON.stringify({ name: 'Guest', email: '', message: text })
-                }).then(function (res) {
-                    // ignore errors silently
-                }).catch(function () {});
-            } catch (e) {
-                // noop
-            }
-        }, 900);
+        } catch (error) {
+            addAssistantMessage('I am having trouble answering that right now. Please try again in a moment or open a support ticket.', 'bot');
+        } finally {
+            setAssistantTyping(false);
+        }
     };
 
     if (assistantLauncher) {
@@ -599,6 +675,7 @@ document.addEventListener('DOMContentLoaded', function () {
         setInterval(function () {
             assistantLauncher.classList.toggle('assistant-pulse');
         }, 5000);
+
         assistantLauncher.addEventListener('click', function () {
             if (!assistantPanel) {
                 return;
@@ -632,6 +709,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             sendAssistantQuery(value);
         });
+
         assistantInput.addEventListener('keydown', function (event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();

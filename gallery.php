@@ -1,5 +1,14 @@
 <?php require_once __DIR__ . '/templates/header.php'; ?>
-<?php $portal = new Portal(Database::getInstance()); $items = $portal->listGalleryItems(); ?>
+<?php
+$portal = new Portal(Database::getInstance());
+$items = $portal->listGalleryItems();
+$pdo = Database::getInstance()->getConnection();
+$externalAlbumTableExists = (bool)$pdo->query("SHOW TABLES LIKE 'external_photo_albums'")->fetchColumn();
+$externalAlbums = $externalAlbumTableExists
+  ? $pdo->query("SELECT * FROM external_photo_albums WHERE status = 'active' ORDER BY event_date DESC, created_at DESC")->fetchAll()
+  : [];
+$externalAlbums = array_values(array_filter($externalAlbums, static fn(array $album): bool => isValidGooglePhotosAlbumUrl((string)($album['google_photos_url'] ?? ''))));
+?>
 <?php
 $categories = ['All', 'Matriculation', 'Workshops', 'Seminars', 'Tech Events', 'Coding Competitions', 'Student Projects', 'Videos'];
 ?>
@@ -38,6 +47,35 @@ $categories = ['All', 'Matriculation', 'Workshops', 'Seminars', 'Tech Events', '
     </div>
   </section>
 
+  <?php if (!empty($externalAlbums)): ?>
+  <?php if (!empty($items)): ?>
+  <section class="container py-4" data-aos="fade-up">
+    <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+      <div><div class="eyebrow">Official Event Galleries</div><h2 class="fw-bold mb-0">Explore Full Photo Albums</h2></div>
+      <p class="text-secondary mb-0">Albums open on Google Photos; only cover images are hosted here.</p>
+    </div>
+    <div class="external-album-grid row g-4">
+      <?php foreach ($externalAlbums as $album): ?>
+        <div class="col-md-6 col-xl-4">
+          <article class="external-album-card glass-card h-100 overflow-hidden">
+            <a class="external-album-cover" href="<?= e((string)$album['google_photos_url']) ?>" target="_blank" rel="noopener noreferrer" aria-label="View <?= e((string)$album['title']) ?> on Google Photos">
+              <img src="<?= e(asset((string)$album['cover_image'])) ?>" alt="<?= e((string)$album['title']) ?> official event gallery cover" loading="lazy">
+              <span class="external-album-badge"><i data-lucide="images"></i> Google Photos album</span>
+            </a>
+            <div class="p-4 d-flex flex-column">
+              <div class="small text-success fw-semibold mb-2">Official Event Gallery</div>
+              <h3 class="h5 fw-bold mb-2"><?= e((string)$album['title']) ?></h3>
+              <?php if (!empty($album['description'])): ?><p class="text-secondary mb-3"><?= e((string)$album['description']) ?></p><?php endif; ?>
+              <?php if (!empty($album['event_date'])): ?><div class="gallery-card-date mb-3"><i data-lucide="calendar-days"></i><?= e(date('M j, Y', strtotime((string)$album['event_date']))) ?></div><?php endif; ?>
+              <a class="btn btn-success mt-auto" href="<?= e((string)$album['google_photos_url']) ?>" target="_blank" rel="noopener noreferrer">View Full Album <i data-lucide="external-link" class="ms-1"></i></a>
+            </div>
+          </article>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </section>
+  <?php endif; ?>
+
   <section class="container py-4" data-aos="fade-up">
     <div class="gallery-slider glass-card overflow-hidden">
       <div class="gallery-slider-track">
@@ -66,8 +104,10 @@ $categories = ['All', 'Matriculation', 'Workshops', 'Seminars', 'Tech Events', '
       </div>
     </div>
   </section>
+  <?php endif; ?>
 
   <section class="container py-4">
+    <?php if (!empty($items)): ?>
     <div class="gallery-toolbar glass-card p-3 mb-4" data-aos="fade-up">
       <div class="d-flex flex-wrap gap-2 justify-content-center">
         <?php foreach ($categories as $category): ?>
@@ -75,14 +115,15 @@ $categories = ['All', 'Matriculation', 'Workshops', 'Seminars', 'Tech Events', '
         <?php endforeach; ?>
       </div>
     </div>
+    <?php endif; ?>
 
-    <?php if (empty($items)): ?>
+    <?php if (empty($items) && empty($externalAlbums)): ?>
       <div class="empty-state glass-card text-center" data-aos="fade-up">
         <i data-lucide="image-plus"></i>
         <h3>No gallery items are available yet.</h3>
         <p>Check back soon for photos and videos from departmental activities.</p>
       </div>
-    <?php else: ?>
+    <?php elseif (!empty($items)): ?>
       <div class="gallery-grid">
         <?php foreach ($items as $item): ?>
           <?php $mediaType = detectMediaType($item['image_path']); $category = $item['category'] ?: 'Others'; $mediaUrl = asset($item['image_path']); ?>

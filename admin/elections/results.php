@@ -19,6 +19,13 @@ if (!$elec) {
     exit;
 }
 
+  if (!$election->isResultsPublished($electionId)) {
+    http_response_code(403);
+    echo '<div class="container py-5"><div class="alert alert-warning">Final results are available only after the election is closed.</div></div>';
+    require_once dirname(__DIR__, 2) . '/templates/footer.php';
+    exit;
+  }
+
 $results = $election->getElectionResults($electionId);
 $stats = $election->getElectionStats($electionId);
 $positions = $election->listPositions($electionId);
@@ -33,7 +40,7 @@ $positions = $election->listPositions($electionId);
         <div>
           <div class="hero-badge"><i data-lucide="bar-chart-3"></i> Results</div>
           <h2 class="fw-bold mt-3 mb-1"><?= e((string)($elec['title'] ?? '—')) ?></h2>
-          <p class="text-secondary mb-0">Live election results and statistics.</p>
+          <p class="text-secondary mb-0">Final election results and statistics.</p>
         </div>
         <div class="d-flex gap-2">
           <button class="btn btn-outline-secondary btn-sm" onclick="window.print();"><i data-lucide="printer"></i> Print</button>
@@ -45,13 +52,13 @@ $positions = $election->listPositions($electionId);
       <div class="row g-3 mb-4">
         <div class="col-md-4">
           <div class="glass-card p-3">
-            <small class="text-secondary">Total Registered Voters</small>
+            <small class="text-secondary">Eligible Voters</small>
             <h4 class="fw-bold mt-2"><?= number_format((int)$stats['total_registered_voters']) ?></h4>
           </div>
         </div>
         <div class="col-md-4">
           <div class="glass-card p-3">
-            <small class="text-secondary">Total Votes Cast</small>
+            <small class="text-secondary">Ballots Cast</small>
             <h4 class="fw-bold mt-2"><?= number_format((int)$stats['total_votes_cast']) ?></h4>
           </div>
         </div>
@@ -62,6 +69,8 @@ $positions = $election->listPositions($electionId);
           </div>
         </div>
       </div>
+
+      <div class="small text-secondary mb-3">Unique voters: <?= number_format((int)$stats['unique_voters']) ?></div>
 
       <!-- Results by Position -->
       <?php foreach ($results as $positionId => $positionResult): ?>

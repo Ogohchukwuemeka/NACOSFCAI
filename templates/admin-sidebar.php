@@ -6,6 +6,7 @@ $adminPages = [
     ['href' => APP_URL . '/admin/id-cards.php', 'icon' => 'id-card', 'label' => 'ID Cards'],
     ['href' => APP_URL . '/admin/certificates.php', 'icon' => 'award', 'label' => 'Certificates'],
     ['href' => APP_URL . '/admin/elections.php', 'icon' => 'vote', 'label' => 'Voting'],
+    ['href' => APP_URL . '/admin/community-chat.php', 'icon' => 'messages-square', 'label' => 'Chat & Community'],
     ['href' => APP_URL . '/admin/content.php', 'icon' => 'layers-3', 'label' => 'Content'],
     ['href' => APP_URL . '/admin/support/tickets.php', 'icon' => 'message-square-more', 'label' => 'Support'],
     ['href' => APP_URL . '/admin/visitor-messages.php', 'icon' => 'message-circle', 'label' => 'Visitor Messages'],

@@ -12,9 +12,9 @@ $viewType = $_GET['view'] ?? 'all'; // 'all' or 'detailed'
 // Get student details
 $student = $pdo->query("SELECT s.*, u.full_name FROM students s JOIN users u ON u.id = s.user_id WHERE u.id = $studentId")->fetch();
 
-// Results are available only while voting is live or after an election closes.
+// Refresh scheduled/expired states before listing published results.
 $election->refreshAllElectionStatuses();
-$allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 'closed') ORDER BY start_time DESC")->fetchAll();
+$allElections = $pdo->query("SELECT * FROM elections WHERE status = 'closed' ORDER BY start_time DESC")->fetchAll();
 ?>
 <div class="container py-5">
   <div class="row g-4 align-items-start">
@@ -25,7 +25,7 @@ $allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 
       <div>
         <div class="hero-badge"><i data-lucide="bar-chart-3"></i> Election Results</div>
         <h2 class="fw-bold mt-3 mb-1">View Election Results</h2>
-        <p class="text-secondary mb-0">Live results from ongoing and completed elections.</p>
+        <p class="text-secondary mb-0">Final results from completed elections.</p>
       </div>
 
       <?php if (!$electionId): ?>
@@ -54,13 +54,7 @@ $allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 
                 default => 'secondary'
               };
               
-              $statusText = match($status) {
-                'draft' => 'Draft',
-                'scheduled' => 'Upcoming',
-                'active' => 'Live Voting',
-                'closed' => 'Completed',
-                default => 'Unknown'
-              };
+              $statusText = 'Completed';
               ?>
               <div class="col-lg-6">
                 <div class="glass-card p-4 h-100">
@@ -75,11 +69,11 @@ $allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 
                   <!-- Quick Stats -->
                   <div class="row g-2 mb-3">
                     <div class="col-6">
-                      <small class="text-secondary">Registered</small>
+                      <small class="text-secondary">Eligible voters</small>
                       <div class="fw-bold"><?= (int)($stats['total_registered_voters'] ?? 0) ?></div>
                     </div>
                     <div class="col-6">
-                      <small class="text-secondary">Votes Cast</small>
+                      <small class="text-secondary">Ballots cast</small>
                       <div class="fw-bold"><?= (int)($stats['total_votes_cast'] ?? 0) ?></div>
                     </div>
                   </div>
@@ -110,8 +104,8 @@ $allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 
         
         if (!$elec) {
             echo '<div class="alert alert-danger mt-4">Election not found.</div>';
-        } elseif (!in_array($elec['status'], ['active', 'closed'], true)) {
-          echo '<div class="alert alert-warning mt-4">Results for this election are not available yet.</div>';
+        } elseif (!$election->isResultsPublished($electionId)) {
+          echo '<div class="alert alert-warning mt-4">Final results are available after voting is closed.</div>';
         } else {
             $status = $elec['status'];
             $statusColor = match($status) {
@@ -147,14 +141,20 @@ $allElections = $pdo->query("SELECT * FROM elections WHERE status IN ('active', 
           <div class="row g-3 mb-4">
             <div class="col-md-6 col-lg-3">
               <div class="glass-card p-3 text-center">
-                <small class="text-secondary d-block mb-2">Registered Voters</small>
+                <small class="text-secondary d-block mb-2">Eligible Voters</small>
                 <div class="fw-bold" style="font-size: 24px;"><?= (int)($stats['total_registered_voters'] ?? 0) ?></div>
               </div>
             </div>
             <div class="col-md-6 col-lg-3">
               <div class="glass-card p-3 text-center">
-                <small class="text-secondary d-block mb-2">Votes Cast</small>
+                <small class="text-secondary d-block mb-2">Ballots Cast</small>
                 <div class="fw-bold" style="font-size: 24px;"><?= (int)($stats['total_votes_cast'] ?? 0) ?></div>
+              </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+              <div class="glass-card p-3 text-center">
+                <small class="text-secondary d-block mb-2">Unique Voters</small>
+                <div class="fw-bold" style="font-size: 24px;"><?= (int)($stats['unique_voters'] ?? 0) ?></div>
               </div>
             </div>
             <div class="col-md-6 col-lg-3">

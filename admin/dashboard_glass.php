@@ -1,4 +1,9 @@
-<?php require_once dirname(__DIR__) . '/templates/header.php'; ?>
+<?php
+require_once dirname(__DIR__) . '/config/bootstrap.php';
+$auth = new Auth(Database::getInstance());
+$auth->requireLogin('admin');
+require_once dirname(__DIR__) . '/templates/header.php';
+?>
 <?php
 $portal = new Portal(Database::getInstance());
 $pdo = Database::getInstance()->getConnection();

@@ -25,11 +25,13 @@ $pdo = Database::getInstance()->getConnection();
 $userRole = $_SESSION['user_role'] ?? null;
 $userId = (int)($_SESSION['user_id'] ?? 0);
 
-if ($userId <= 0 || !in_array($userRole, ['student', 'admin'], true)) {
+if (!in_array($userRole, ['student', 'admin'], true)) {
     http_response_code(401);
     echo json_encode(['error' => 'Unauthorized']);
     exit;
 }
+$auth = new Auth(Database::getInstance());
+$auth->requireLogin($userRole);
 
 try {
     verify_csrf();

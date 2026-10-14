@@ -4,6 +4,7 @@ $auth = new Auth(Database::getInstance());
 $auth->requireLogin('admin');
 $portal = new Portal(Database::getInstance());
 $pdo = Database::getInstance()->getConnection();
+$externalAlbumTableExists = (bool)$pdo->query("SHOW TABLES LIKE 'external_photo_albums'")->fetchColumn();
 $executiveTenures = $portal->listExecutiveTenures();
 $errors = [];
 $success = '';
@@ -82,6 +83,17 @@ function galleryMetadata(array $row): array
 function announcementMetadata(array $row): array
 {
     return readJsonMetadata(__DIR__ . '/../assets/uploads/announcements/_meta/' . $row['id'] . '.json');
+}
+
+function deleteExternalAlbumCover(string $relativePath): void
+{
+  if (!preg_match('#^uploads/gallery-albums/[A-Za-z0-9_.-]+$#', $relativePath)) {
+    return;
+  }
+  $diskPath = dirname(__DIR__) . '/assets/' . $relativePath;
+  if (is_file($diskPath)) {
+    @unlink($diskPath);
+  }
 }
 
 function buildPagination(array $items, int $page, int $perPage): array
@@ -537,6 +549,110 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 @unlink(dirname(__DIR__) . '/assets/uploads/gallery/_meta/' . $galleryId . '.json');
                 $success = 'Gallery item deleted.';
             }
+        } elseif (in_array($action, ['create_external_album', 'update_external_album', 'delete_external_album', 'toggle_external_album_status'], true)) {
+          if (!$externalAlbumTableExists) {
+            throw new Exception('External album storage is not installed. Import database_migrations/external_photo_albums.sql in phpMyAdmin first.');
+          }
+
+          if ($action === 'create_external_album' || $action === 'update_external_album') {
+            $albumId = (int)($_POST['album_id'] ?? 0);
+            $title = trim((string)($_POST['title'] ?? ''));
+            $description = trim((string)($_POST['description'] ?? ''));
+            $googlePhotosUrl = trim((string)($_POST['google_photos_url'] ?? ''));
+            $eventDate = trim((string)($_POST['event_date'] ?? ''));
+            $status = trim((string)($_POST['status'] ?? 'active'));
+
+            if ($title === '' || strlen($title) > 180) {
+              throw new Exception('Album title is required and must be 180 characters or fewer.');
+            }
+            if (!isValidGooglePhotosAlbumUrl($googlePhotosUrl)) {
+              throw new Exception('Enter a valid HTTPS Google Photos shared-album URL.');
+            }
+            if (!in_array($status, ['active', 'inactive'], true)) {
+              throw new Exception('Choose a valid album visibility status.');
+            }
+            if ($eventDate !== '') {
+              $parsedDate = DateTime::createFromFormat('!Y-m-d', $eventDate);
+              if (!$parsedDate || $parsedDate->format('Y-m-d') !== $eventDate) {
+                throw new Exception('Choose a valid event date.');
+              }
+            } else {
+              $eventDate = null;
+            }
+
+            $existingAlbum = null;
+            if ($action === 'update_external_album') {
+              if ($albumId <= 0) {
+                throw new Exception('Select a valid photo album to update.');
+              }
+              $findAlbum = $pdo->prepare('SELECT cover_image FROM external_photo_albums WHERE id = :id LIMIT 1');
+              $findAlbum->execute(['id' => $albumId]);
+              $existingAlbum = $findAlbum->fetch();
+              if (!$existingAlbum) {
+                throw new Exception('The photo album could not be found.');
+              }
+            } elseif (empty($_FILES['cover_image']['name'])) {
+              throw new Exception('Upload one cover image for the album.');
+            }
+
+            $newCoverPath = null;
+            if (!empty($_FILES['cover_image']['name'])) {
+              $coverDirectory = dirname(__DIR__) . '/assets/uploads/gallery-albums/';
+              ensureUploadDirectory($coverDirectory);
+              $upload = uploadFile($_FILES['cover_image'], $coverDirectory, ['jpg', 'jpeg', 'png', 'webp', 'gif'], 8 * 1024 * 1024);
+              if (!$upload['success']) {
+                throw new Exception($upload['message']);
+              }
+              $newCoverPath = 'uploads/gallery-albums/' . $upload['filename'];
+            }
+
+            if ($action === 'create_external_album') {
+              $insertAlbum = $pdo->prepare('INSERT INTO external_photo_albums (title, description, google_photos_url, cover_image, event_date, status, created_by) VALUES (:title, :description, :google_photos_url, :cover_image, :event_date, :status, :created_by)');
+              $insertAlbum->execute([
+                'title' => $title,
+                'description' => $description,
+                'google_photos_url' => $googlePhotosUrl,
+                'cover_image' => $newCoverPath,
+                'event_date' => $eventDate,
+                'status' => $status,
+                'created_by' => $adminId > 0 ? $adminId : null,
+              ]);
+              $success = 'External photo album added.';
+            } else {
+              $updateAlbum = $pdo->prepare('UPDATE external_photo_albums SET title = :title, description = :description, google_photos_url = :google_photos_url, cover_image = COALESCE(:cover_image, cover_image), event_date = :event_date, status = :status, updated_at = NOW() WHERE id = :id');
+              $updateAlbum->execute([
+                'title' => $title,
+                'description' => $description,
+                'google_photos_url' => $googlePhotosUrl,
+                'cover_image' => $newCoverPath,
+                'event_date' => $eventDate,
+                'status' => $status,
+                'id' => $albumId,
+              ]);
+              if ($newCoverPath !== null) {
+                deleteExternalAlbumCover((string)$existingAlbum['cover_image']);
+              }
+              $success = 'External photo album updated.';
+            }
+          } elseif ($action === 'delete_external_album') {
+            $albumId = (int)($_POST['album_id'] ?? 0);
+            if ($albumId > 0) {
+              $findAlbum = $pdo->prepare('SELECT cover_image FROM external_photo_albums WHERE id = :id LIMIT 1');
+              $findAlbum->execute(['id' => $albumId]);
+              $album = $findAlbum->fetch();
+              $pdo->prepare('DELETE FROM external_photo_albums WHERE id = :id')->execute(['id' => $albumId]);
+              if ($album) {
+                deleteExternalAlbumCover((string)$album['cover_image']);
+              }
+              $success = 'External photo album deleted.';
+            }
+          } else {
+            $albumId = (int)($_POST['album_id'] ?? 0);
+            if ($albumId > 0) {
+              $pdo->prepare("UPDATE external_photo_albums SET status = IF(status = 'active', 'inactive', 'active'), updated_at = NOW() WHERE id = :id")->execute(['id' => $albumId]);
+              $success = 'External photo album visibility updated.';
+            }
+          }
         } elseif ($action === 'create_announcement') {
             $title = trim($_POST['title'] ?? '');
             $message = trim($_POST['message'] ?? '');
@@ -599,6 +715,9 @@ $events = $pdo->query('SELECT * FROM events ORDER BY event_date DESC, created_at
 $resources = $pdo->query('SELECT * FROM resources ORDER BY created_at DESC')->fetchAll();
 $executives = $pdo->query('SELECT * FROM executives ORDER BY id ASC')->fetchAll();
 $gallery = $pdo->query('SELECT * FROM gallery ORDER BY created_at DESC')->fetchAll();
+$externalAlbums = $externalAlbumTableExists
+  ? $pdo->query('SELECT * FROM external_photo_albums ORDER BY event_date DESC, created_at DESC')->fetchAll()
+  : [];
 $announcements = $pdo->query('SELECT * FROM announcements ORDER BY created_at DESC')->fetchAll();
 
 $search = trim($_GET['q'] ?? '');
@@ -973,6 +1092,66 @@ $stats = [
           <div class="col-12"><button class="btn btn-success">Upload Media</button></div>
         </form>
       </div>
+      <div class="glass-card p-4 mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+          <div><h4 class="fw-bold mb-1">Add Photo Album</h4><p class="text-secondary mb-0">Link a Google Photos album; only its single cover image is stored on this site.</p></div>
+        </div>
+        <?php if (!$externalAlbumTableExists): ?>
+          <div class="alert alert-warning mb-0">Import <code>database_migrations/external_photo_albums.sql</code> in phpMyAdmin to enable external albums.</div>
+        <?php else: ?>
+          <form method="post" enctype="multipart/form-data" class="row g-3">
+            <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+            <input type="hidden" name="action" value="create_external_album">
+            <div class="col-md-6"><label class="form-label">Album title</label><input type="text" name="title" class="form-control" maxlength="180" required></div>
+            <div class="col-md-6"><label class="form-label">Google Photos shared album URL</label><input type="url" name="google_photos_url" class="form-control" maxlength="2048" placeholder="https://photos.google.com/share/..." required></div>
+            <div class="col-md-6"><label class="form-label">Event date <span class="text-secondary">(optional)</span></label><input type="date" name="event_date" class="form-control"></div>
+            <div class="col-md-3"><label class="form-label">Visibility</label><select name="status" class="form-select"><option value="active">Visible</option><option value="inactive">Hidden</option></select></div>
+            <div class="col-md-3"><label class="form-label">One cover image</label><input type="file" name="cover_image" class="form-control" accept="image/jpeg,image/png,image/webp,image/gif" required></div>
+            <div class="col-12"><label class="form-label">Short description</label><textarea name="description" class="form-control" rows="2" maxlength="2000"></textarea></div>
+            <div class="col-12"><button class="btn btn-success">Save Photo Album</button></div>
+          </form>
+        <?php endif; ?>
+      </div>
+      <?php if ($externalAlbumTableExists): ?>
+      <div class="glass-card p-4 mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h4 class="fw-bold mb-1">External Photo Albums</h4><p class="text-secondary mb-0">Manage the Google Photos albums shown publicly.</p></div><span class="badge-soft"><?= count($externalAlbums) ?> albums</span></div>
+        <?php if (empty($externalAlbums)): ?>
+          <p class="text-secondary mb-0">No external albums have been added yet.</p>
+        <?php else: ?>
+          <div class="row g-3">
+            <?php foreach ($externalAlbums as $album): ?>
+              <div class="col-md-6 col-xl-4">
+                <div class="glass-card p-3 h-100">
+                  <img src="<?= e(asset((string)$album['cover_image'])) ?>" class="img-fluid rounded mb-3 w-100" style="aspect-ratio: 16 / 10; object-fit: cover;" alt="<?= e((string)$album['title']) ?> cover">
+                  <div class="fw-semibold"><?= e((string)$album['title']) ?></div>
+                  <div class="small text-secondary mb-2"><?= e($album['event_date'] ? date('M j, Y', strtotime($album['event_date'])) : 'Date not specified') ?> · <?= e(ucfirst((string)$album['status'])) ?></div>
+                  <p class="small text-secondary mb-3"><?= e((string)($album['description'] ?? '')) ?></p>
+                  <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-success btn-sm" data-bs-toggle="modal" data-bs-target="#editExternalAlbum<?= (int)$album['id'] ?>">Edit</button>
+                    <form method="post" class="d-inline"><input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="action" value="toggle_external_album_status"><input type="hidden" name="album_id" value="<?= (int)$album['id'] ?>"><button class="btn btn-outline-secondary btn-sm"><?= $album['status'] === 'active' ? 'Deactivate' : 'Activate' ?></button></form>
+                    <form method="post" class="d-inline" onsubmit="return confirm('Delete this external photo album and its cover image?');"><input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="action" value="delete_external_album"><input type="hidden" name="album_id" value="<?= (int)$album['id'] ?>"><button class="btn btn-outline-danger btn-sm">Delete</button></form>
+                  </div>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+      </div>
+      <?php foreach ($externalAlbums as $album): ?>
+        <div class="modal fade" id="editExternalAlbum<?= (int)$album['id'] ?>" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">Edit Photo Album</h5><button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body">
+          <form method="post" enctype="multipart/form-data" class="row g-3">
+            <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="action" value="update_external_album"><input type="hidden" name="album_id" value="<?= (int)$album['id'] ?>">
+            <div class="col-md-6"><label class="form-label">Album title</label><input type="text" name="title" class="form-control" maxlength="180" value="<?= e((string)$album['title']) ?>" required></div>
+            <div class="col-md-6"><label class="form-label">Google Photos URL</label><input type="url" name="google_photos_url" class="form-control" maxlength="2048" value="<?= e((string)$album['google_photos_url']) ?>" required></div>
+            <div class="col-md-6"><label class="form-label">Event date</label><input type="date" name="event_date" class="form-control" value="<?= e((string)($album['event_date'] ?? '')) ?>"></div>
+            <div class="col-md-3"><label class="form-label">Visibility</label><select name="status" class="form-select"><option value="active" <?= $album['status'] === 'active' ? 'selected' : '' ?>>Visible</option><option value="inactive" <?= $album['status'] === 'inactive' ? 'selected' : '' ?>>Hidden</option></select></div>
+            <div class="col-md-3"><label class="form-label">Replace cover (optional)</label><input type="file" name="cover_image" class="form-control" accept="image/jpeg,image/png,image/webp,image/gif"></div>
+            <div class="col-12"><label class="form-label">Short description</label><textarea name="description" class="form-control" rows="3" maxlength="2000"><?= e((string)($album['description'] ?? '')) ?></textarea></div>
+            <div class="col-12"><button class="btn btn-success">Save Changes</button></div>
+          </form>
+        </div></div></div></div>
+      <?php endforeach; ?>
+      <?php endif; ?>
       <div class="glass-card p-4">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <div><h4 class="fw-bold mb-1">Gallery Manager</h4><p class="text-secondary mb-0">Preview, edit and delete images or videos.</p></div>

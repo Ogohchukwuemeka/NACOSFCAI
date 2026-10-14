@@ -88,7 +88,7 @@ $activeElections = $election->getActiveElections();
         </div>
       <?php endif; ?>
 
-      <?php if (empty($activeElections)): ?>
+      <?php if (empty($activeElections) && !$electionId): ?>
         <div class="glass-card p-4 mt-4 text-center">
           <i data-lucide="inbox" style="font-size: 48px; color: #999; margin-bottom: 15px;"></i>
           <p class="text-secondary">No active elections at this time. Check back later.</p>
@@ -117,6 +117,7 @@ $activeElections = $election->getActiveElections();
           <?php
           $elec = $election->getElection($electionId);
           $positions = $election->listPositions($electionId);
+          $votingOpen = $elec && $election->isElectionOpen($electionId);
           if ($elec && !empty($positions)):
           ?>
             <div class="glass-card election-header p-4 mt-4 mb-4">
@@ -126,11 +127,15 @@ $activeElections = $election->getActiveElections();
                   <p class="text-secondary mb-0"><?= e((string)($elec['description'] ?? '')) ?></p>
                 </div>
                 <div class="text-end">
-                  <span class="badge bg-success d-block mb-2">Voting is open</span>
+                  <span class="badge bg-<?= $votingOpen ? 'success' : 'secondary' ?> d-block mb-2"><?= $votingOpen ? 'Voting is open' : 'Voting is closed' ?></span>
                   <a href="<?= APP_URL ?>/student/voting.php" class="btn btn-outline-secondary btn-sm">Back</a>
                 </div>
               </div>
             </div>
+
+            <?php if (!$votingOpen): ?>
+              <div class="alert alert-info">This election is not currently accepting votes. You can review the ballot, but submissions are closed.</div>
+            <?php endif; ?>
 
             <!-- Voting by Position -->
             <?php foreach ($positions as $position): ?>
@@ -180,7 +185,7 @@ $activeElections = $election->getActiveElections();
                             </div>
                           <?php endif; ?>
 
-                          <?php if (!$hasVoted): ?>
+                          <?php if (!$hasVoted && $votingOpen): ?>
                             <form method="POST" class="d-grid">
                               <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                               <input type="hidden" name="candidate_id" value="<?= (int)$candidate['id'] ?>">
@@ -188,10 +193,12 @@ $activeElections = $election->getActiveElections();
                               <input type="hidden" name="election_id" value="<?= $electionId ?>">
                               <button type="submit" class="btn btn-success btn-sm"><i data-lucide="vote"></i> Vote</button>
                             </form>
-                          <?php else: ?>
+                          <?php elseif ($hasVoted): ?>
                             <div class="alert <?= (int)$candidate['id'] === $votedCandidateId ? 'alert-success' : 'alert-light' ?> alert-sm mb-0">
                               <small><?= (int)$candidate['id'] === $votedCandidateId ? 'Your vote' : 'Not selected' ?></small>
                             </div>
+                          <?php else: ?>
+                            <div class="alert alert-light alert-sm mb-0"><small>Voting is closed</small></div>
                           <?php endif; ?>
                         </div>
                       </div>

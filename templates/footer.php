@@ -31,7 +31,7 @@
                 <div class="footer-card p-4 h-100">
                     <h6 class="footer-widget-title mb-4">Student Links</h6>
                     <ul class="list-unstyled footer-links">
-                        <li><a href="<?= APP_URL ?>/auth/login.php">Student Login</a></li>
+                        <li><a href="<?= APP_URL ?>/auth/login.php">Login</a></li>
                         <li><a href="<?= APP_URL ?>/auth/register.php">Register</a></li>
                         <li><a href="<?= APP_URL ?>/student/payments.php">Payments</a></li>
                         <li><a href="<?= APP_URL ?>/student/resources.php">Resources</a></li>
@@ -119,6 +119,44 @@
     </div>
 </footer>
 <button id="backToTop" type="button" class="back-to-top" aria-label="Scroll back to top"><i data-lucide="chevron-up"></i></button>
+
+<button id="assistantLauncher" class="assistant-launcher" type="button" aria-expanded="false" aria-controls="assistantPanel">
+    <span class="assistant-launcher-icon"><i class="fa-solid fa-headset"></i></span>
+    <span class="assistant-launcher-label">Need help?</span>
+</button>
+
+<div id="assistantPanel" class="assistant-panel" hidden>
+    <div class="assistant-panel-header">
+        <div>
+            <div class="assistant-panel-title">NACOS Assistant</div>
+            <small class="assistant-panel-subtitle">Student support</small>
+        </div>
+        <button id="assistantClose" type="button" class="assistant-close" aria-label="Close assistant">×</button>
+    </div>
+
+    <div id="assistantMessages" class="assistant-messages" aria-live="polite">
+        <div class="assistant-message assistant-message-bot">
+            <div class="assistant-message-content">
+                <p>Hello! I can help with registrations, payments, certificates, support, resources, and general student portal questions.</p>
+            </div>
+            <span class="assistant-timestamp">Now</span>
+        </div>
+    </div>
+
+    <div class="assistant-suggestions" aria-label="Suggested questions">
+        <button type="button" class="assistant-suggestion">How do I register?</button>
+        <button type="button" class="assistant-suggestion">How do I pay dues?</button>
+        <button type="button" class="assistant-suggestion">How do I get my certificate?</button>
+    </div>
+
+    <div id="assistantStatus" class="assistant-status" hidden>Assistant is typing…</div>
+
+    <div class="assistant-composer">
+        <textarea id="assistantInput" rows="2" placeholder="Ask a question..."></textarea>
+        <button id="assistantSend" type="button" class="assistant-send-btn">Send</button>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/aos/2.3.4/aos.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>

@@ -41,8 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif (strtotime($start_time) >= strtotime($end_time)) {
             $errors[] = 'End date must be after start date.';
         }
-        if (!in_array($status, ['draft', 'scheduled', 'active', 'closed'], true)) {
+        if (!in_array($status, ['draft', 'scheduled', 'active'], true)) {
           $errors[] = 'Invalid election status selected.';
+        }
+        if ($status === 'active' && strtotime($start_time) !== false && strtotime($end_time) !== false
+            && (strtotime($start_time) > time() || strtotime($end_time) <= time())) {
+          $errors[] = 'Voting can only be activated during the scheduled election period.';
         }
         
         if (empty($errors)) {
@@ -60,27 +64,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif ($actionToProcess === 'update' && $electionId) {
         $status = $_POST['status'] ?? 'draft';
-        $election->updateElection($electionId, ['status' => $status]);
+      if ($election->updateElection($electionId, ['status' => $status])) {
         $success = 'Election updated successfully.';
-    } elseif ($actionToProcess === 'delete' && $electionId) {
-        $election->deleteElection($electionId);
-        $success = 'Election deleted successfully.';
-        header('Location: ' . APP_URL . '/admin/elections.php');
+      } else {
+        $errors[] = 'This election status change is not allowed. Check the election dates and whether voting has started.';
+      }
+    } elseif ($actionToProcess === 'delete') {
+      $deleteId = (int)($_POST['id'] ?? 0);
+      if ($deleteId > 0 && $election->deleteElection($deleteId)) {
+        header('Location: ' . APP_URL . '/admin/elections.php?deleted=1');
         exit;
+      }
+      $errors[] = $deleteId > 0
+        ? 'Election could not be deleted. Elections with recorded votes must be retained.'
+        : 'Invalid election selected for deletion.';
     } elseif ($actionToProcess === 'view' && $electionId && isset($_POST['update_status'])) {
         $status = $_POST['status'] ?? '';
         $allowed = ['draft', 'scheduled', 'active', 'closed'];
-        if (in_array($status, $allowed, true)) {
-            $election->updateElection($electionId, ['status' => $status]);
+        if (in_array($status, $allowed, true) && $election->updateElection($electionId, ['status' => $status])) {
             $success = 'Election status updated to ' . ucfirst($status) . '.';
         } else {
-            $errors[] = 'Invalid election status selected.';
+          $errors[] = 'That status change is not allowed. Voting cannot open before its start time, and a closed election cannot be reopened.';
         }
     } elseif ($actionToProcess === 'view' && $electionId && isset($_POST['send_results_email'])) {
         if ($election->sendElectionResultsEmail($electionId)) {
             $success = 'Election results were emailed to all active students.';
         } else {
-            $errors[] = 'Unable to send election results email. Please check mail settings.';
+          $errors[] = $election->isResultsPublished($electionId)
+            ? 'Unable to send election results email. Please check mail settings.'
+            : 'Results emails are available only after the election is closed.';
         }
     }
 }
@@ -93,6 +105,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <?php endforeach; ?>
           <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
+<?php endif; ?>
+
+<?php if (isset($_GET['deleted'])): ?>
+  <div class="alert alert-success alert-dismissible fade show" role="alert">
+    Election deleted successfully.
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
 <?php endif; ?>
 
 <?php if ($action === 'list'): ?>
@@ -160,7 +179,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <option value="draft">Draft</option>
                 <option value="scheduled">Scheduled</option>
                 <option value="active">Active</option>
-                <option value="closed">Closed</option>
               </select>
             </div>
                 <input type="hidden" name="action" value="create">
@@ -202,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <a href="<?= APP_URL ?>/admin/elections/candidates.php?election_id=<?= (int)$elec['id'] ?>" class="btn btn-primary btn-sm">Manage Candidates</a>
+            <?php if ($election->isResultsPublished($electionId)): ?>
             <a href="<?= APP_URL ?>/admin/elections/results.php?election_id=<?= (int)$elec['id'] ?>" class="btn btn-info btn-sm">View Results</a>
             <a href="<?= APP_URL ?>/admin/elections/results-export.php?election_id=<?= (int)$elec['id'] ?>&format=pdf" class="btn btn-outline-danger btn-sm">Export PDF</a>
             <a href="<?= APP_URL ?>/admin/elections/results-export.php?election_id=<?= (int)$elec['id'] ?>&format=excel" class="btn btn-outline-success btn-sm">Export Excel</a>
@@ -211,21 +230,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <input type="hidden" name="send_results_email" value="1">
               <button type="submit" class="btn btn-outline-primary btn-sm">Email Results</button>
             </form>
+            <?php endif; ?>
             <a href="<?= APP_URL ?>/admin/elections.php" class="btn btn-outline-secondary btn-sm">Back</a>
           </div>
           <div class="mt-3 d-flex flex-wrap gap-2 align-items-center">
-            <?php $isEnded = strtotime($elec['end_time']) <= time(); ?>
-            <form method="POST" class="d-inline-flex gap-2 align-items-center">
+            <?php
+              $isEnded = strtotime($elec['end_time']) <= time();
+              $isNotStarted = strtotime($elec['start_time']) > time();
+              $isClosed = (string)$elec['status'] === 'closed';
+            ?>
+            <form method="POST" class="d-inline-flex gap-2 align-items-center" onsubmit="return <?= ((string)($elec['status'] ?? '') === 'closed') ? 'confirm(\'Reopen voting? Results will be hidden while voting is open again.\')' : 'true' ?>;">
               <input type="hidden" name="action" value="view">
               <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
               <input type="hidden" name="update_status" value="1">
               <input type="hidden" name="status" value="<?= ((string)($elec['status'] ?? 'draft') === 'active') ? 'closed' : 'active' ?>">
-              <button type="submit" class="btn btn-<?= ((string)($elec['status'] ?? 'draft') === 'active') ? 'danger' : 'success' ?> btn-sm" <?= $isEnded ? 'disabled' : '' ?>>
+              <button type="submit" class="btn btn-<?= ((string)($elec['status'] ?? 'draft') === 'active') ? 'danger' : 'success' ?> btn-sm" <?= ($isEnded || $isNotStarted) ? 'disabled' : '' ?>>
                 <?= ((string)($elec['status'] ?? 'draft') === 'active') ? 'Close Voting' : 'Open Voting' ?>
               </button>
             </form>
             <?php if ($isEnded): ?>
               <span class="badge bg-secondary">Election ended</span>
+            <?php elseif ($isNotStarted): ?>
+              <span class="text-secondary">Voting opens at the scheduled start time.</span>
+            <?php elseif ($isClosed): ?>
+              <span class="text-secondary">Voting is closed manually. Reopen it before the scheduled end time if needed.</span>
             <?php else: ?>
               <span class="text-secondary">Use this toggle to open or close voting manually.</span>
             <?php endif; ?>
@@ -245,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
             <div class="col-md-4">
               <div class="fw-bold h3"><?= number_format((int)$election->getElectionStats($electionId)['total_votes_cast']) ?></div>
-              <small class="text-secondary">Votes cast</small>
+              <small class="text-secondary">Ballots cast</small>
             </div>
           </div>
           <div class="mt-3">

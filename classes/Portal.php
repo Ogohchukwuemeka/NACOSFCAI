@@ -65,7 +65,7 @@ class Portal
         $pdo = $this->db->getConnection();
         $stats = [];
         $stats['students'] = (int)$pdo->query('SELECT COUNT(*) FROM students')->fetchColumn();
-        $stats['resources'] = (int)$pdo->query('SELECT COUNT(*) FROM resources')->fetchColumn();
+        $stats['resources'] = (int)$pdo->query("SELECT COUNT(*) FROM resources WHERE file_path IS NOT NULL AND file_path <> ''")->fetchColumn();
         $stats['executives'] = (int)$pdo->query('SELECT COUNT(*) FROM executives')->fetchColumn();
         $stats['events'] = (int)$pdo->query('SELECT COUNT(*) FROM events')->fetchColumn();
         $stats['payments'] = (int)$pdo->query('SELECT COUNT(*) FROM payments')->fetchColumn();
@@ -578,6 +578,27 @@ class Portal
             ];
         }
         return $posts;
+    }
+
+    public function getCommunityPostsForAdmin(): array
+    {
+        $this->ensureCommunityPostsSchema();
+        $stmt = $this->db->getConnection()->query('SELECT cp.id, cp.student_id, cp.sender, cp.content, cp.created_at, u.full_name, u.email FROM community_posts cp LEFT JOIN students s ON s.id = cp.student_id LEFT JOIN users u ON u.id = s.user_id ORDER BY cp.created_at DESC, cp.id DESC');
+        return $stmt->fetchAll();
+    }
+
+    public function deleteCommunityPostAsAdmin(int $postId): bool
+    {
+        $this->ensureCommunityPostsSchema();
+        $stmt = $this->db->getConnection()->prepare('DELETE FROM community_posts WHERE id = :id');
+        $stmt->execute(['id' => $postId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function clearCommunityPosts(): int
+    {
+        $this->ensureCommunityPostsSchema();
+        return $this->db->getConnection()->exec('DELETE FROM community_posts');
     }
 
     public function getCommunityPost(int $postId): ?array
@@ -1444,6 +1465,133 @@ SQL
             'generated' => $generated,
             'sent' => $sent,
             'pending' => $total - $generated,
+        ];
+    }
+
+    public function resolveAssistantReply(string $message): string
+    {
+        $query = trim($message);
+        if ($query === '') {
+            return 'Please ask a question about registration, payments, certificates, support, or student portal access.';
+        }
+
+        $matches = $this->getAssistantKnowledgeEntries();
+        if ($matches === []) {
+            return $this->getAssistantFallbackReply($query);
+        }
+
+        $scoreMap = [];
+        $normalizedQuery = strtolower($query);
+        $queryTokens = preg_split('/[^a-z0-9]+/i', $normalizedQuery, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        foreach ($matches as $index => $entry) {
+            $keyword = strtolower((string)($entry['keyword'] ?? ''));
+            $response = strtolower((string)($entry['response'] ?? ''));
+            $category = strtolower((string)($entry['category'] ?? ''));
+            $score = 0;
+
+            if ($keyword !== '' && stripos($normalizedQuery, $keyword) !== false) {
+                $score += 12;
+            }
+
+            foreach ($queryTokens as $token) {
+                if ($token === '') {
+                    continue;
+                }
+                if (stripos($keyword, $token) !== false || stripos($response, $token) !== false || stripos($category, $token) !== false) {
+                    $score += 3;
+                }
+            }
+
+            if ($score > 0) {
+                $scoreMap[$index] = $score;
+            }
+        }
+
+        if ($scoreMap === []) {
+            return $this->getAssistantFallbackReply($query);
+        }
+
+        arsort($scoreMap);
+        $bestIndex = (int)array_key_first($scoreMap);
+        return trim((string)($matches[$bestIndex]['response'] ?? $this->getAssistantFallbackReply($query)));
+    }
+
+    public function getAssistantKnowledgeEntries(): array
+    {
+        $pdo = $this->db->getConnection();
+        try {
+            $tableExists = $pdo->query("SHOW TABLES LIKE 'assistant_knowledge'")->fetchColumn();
+            if (!$tableExists) {
+                return $this->getAssistantFallbackKnowledge();
+            }
+
+            $stmt = $pdo->query('SELECT keyword, response, category FROM assistant_knowledge ORDER BY created_at DESC LIMIT 50');
+            $rows = $stmt->fetchAll();
+            if ($rows === []) {
+                return $this->getAssistantFallbackKnowledge();
+            }
+
+            return array_map(static function ($row) {
+                return [
+                    'keyword' => (string)($row['keyword'] ?? ''),
+                    'response' => (string)($row['response'] ?? ''),
+                    'category' => (string)($row['category'] ?? ''),
+                ];
+            }, $rows);
+        } catch (Throwable $e) {
+            return $this->getAssistantFallbackKnowledge();
+        }
+    }
+
+    private function getAssistantFallbackReply(string $query): string
+    {
+        $normalized = strtolower(trim($query));
+        if ($normalized === '') {
+            return 'Please ask a question about registration, payments, certificates, support, or student portal access.';
+        }
+
+        if (str_contains($normalized, 'register') || str_contains($normalized, 'signup') || str_contains($normalized, 'join')) {
+            return 'To register, open the registration page, complete your student profile, and submit the required details. If you already have an account, sign in and use the student dashboard.';
+        }
+
+        if (str_contains($normalized, 'pay') || str_contains($normalized, 'payment') || str_contains($normalized, 'dues') || str_contains($normalized, 'fee')) {
+            return 'Use the student payments page to view dues, upload proof of payment, and wait for verification. You can also check your payment status from the dashboard.';
+        }
+
+        if (str_contains($normalized, 'certificate') || str_contains($normalized, 'cert')) {
+            return 'Certificate access usually becomes available after your payments are verified and your profile is complete. Visit the student dashboard and check the certificate section.';
+        }
+
+        if (str_contains($normalized, 'id card') || str_contains($normalized, 'idcard') || str_contains($normalized, 'card')) {
+            return 'Your ID card request is tied to your verified payment and profile information. Please check the student dashboard for ID card access and generation.';
+        }
+
+        if (str_contains($normalized, 'support') || str_contains($normalized, 'ticket') || str_contains($normalized, 'help')) {
+            return 'You can open a support ticket from the student support page. Include the issue, category, and screenshots if needed so the team can resolve it quickly.';
+        }
+
+        if (str_contains($normalized, 'resource') || str_contains($normalized, 'study') || str_contains($normalized, 'notes')) {
+            return 'Study resources are available from the student resources page. You can filter by your level and semester to find relevant materials.';
+        }
+
+        if (str_contains($normalized, 'event') || str_contains($normalized, 'upcoming')) {
+            return 'You can view upcoming events on the events page and check event updates from the dashboard announcements and notifications.';
+        }
+
+        return 'I can help with registration, payments, certificates, support tickets, ID cards, resources, and general student portal questions. Please ask a more specific question.';
+    }
+
+    private function getAssistantFallbackKnowledge(): array
+    {
+        return [
+            ['keyword' => 'register', 'response' => 'To register, open the registration page, complete your student profile, and submit the required details. If you already have an account, sign in from the student dashboard.', 'category' => 'registration'],
+            ['keyword' => 'payment', 'response' => 'Use the student payments page to view dues, upload proof of payment, and wait for verification. You can also check your payment status from the dashboard.', 'category' => 'payments'],
+            ['keyword' => 'certificate', 'response' => 'Certificate access usually becomes available after your payments are verified and your profile is complete. Visit the student dashboard and check the certificate section.', 'category' => 'certificates'],
+            ['keyword' => 'id card', 'response' => 'Your ID card request is tied to your verified payment and profile information. Please check the student dashboard for ID card access and generation.', 'category' => 'student services'],
+            ['keyword' => 'support', 'response' => 'You can open a support ticket from the student support page. Include the issue, category, and screenshots if needed so the team can resolve it quickly.', 'category' => 'support'],
+            ['keyword' => 'resources', 'response' => 'Study resources are available from the student resources page. You can filter by your level and semester to find relevant materials.', 'category' => 'resources'],
+            ['keyword' => 'events', 'response' => 'You can view upcoming events on the events page and check event updates from the dashboard announcements and notifications.', 'category' => 'events'],
         ];
     }
 }

@@ -15,16 +15,32 @@ class Election
     {
         $pdo = $this->db->getConnection();
         $this->ensureElectionSchema($pdo);
+        $startTime = (string)($data['start_time'] ?? date('Y-m-d H:i:s'));
+        $endTime = (string)($data['end_time'] ?? date('Y-m-d H:i:s', strtotime('+7 days')));
+        $status = (string)($data['status'] ?? 'draft');
+        if (strtotime($startTime) === false || strtotime($endTime) === false || strtotime($startTime) >= strtotime($endTime)) {
+            throw new InvalidArgumentException('Election start and end times are invalid.');
+        }
+        if (!in_array($status, ['draft', 'scheduled', 'active'], true)) {
+            throw new InvalidArgumentException('Election status is invalid.');
+        }
+        if ($status === 'active' && (strtotime($startTime) > time() || strtotime($endTime) <= time())) {
+            throw new InvalidArgumentException('Voting can only be opened within the scheduled election period.');
+        }
         $stmt = $pdo->prepare('INSERT INTO elections (title, description, start_time, end_time, status, created_by) VALUES (:title, :description, :start_time, :end_time, :status, :created_by)');
         $stmt->execute([
             'title' => $data['title'] ?? '',
             'description' => $data['description'] ?? '',
-            'start_time' => $data['start_time'] ?? date('Y-m-d H:i:s'),
-            'end_time' => $data['end_time'] ?? date('Y-m-d H:i:s', strtotime('+7 days')),
-            'status' => $data['status'] ?? 'draft',
+            'start_time' => $startTime,
+            'end_time' => $endTime,
+            'status' => $status,
             'created_by' => $data['created_by'] ?? null,
         ]);
-        return (int)$pdo->lastInsertId();
+        $id = (int)$pdo->lastInsertId();
+        if ($status === 'active') {
+            $this->snapshotEligibleVoters($id);
+        }
+        return $id;
     }
 
     public function getElection(int $electionId): ?array
@@ -62,7 +78,7 @@ class Election
     public function getActiveElections(): array
     {
         $this->refreshAllElectionStatuses();
-        $stmt = $this->db->getConnection()->prepare('SELECT * FROM elections WHERE status = :status AND end_time >= NOW() ORDER BY start_time ASC');
+        $stmt = $this->db->getConnection()->prepare('SELECT * FROM elections WHERE status = :status AND start_time <= NOW() AND end_time > NOW() ORDER BY start_time ASC');
         $stmt->execute(['status' => 'active']);
         return $stmt->fetchAll();
     }
@@ -86,14 +102,8 @@ class Election
                 $nextStatus = 'active';
             }
         } elseif ($currentStatus === 'active') {
-            // Keep manually opened elections active even if the official start time is later.
-            if ($now >= $end) {
-                $nextStatus = 'closed';
-            }
-        } elseif ($currentStatus === 'closed') {
-            // Keep manually closed elections closed until an admin reopens them.
-            if ($now >= $end) {
-                $nextStatus = 'closed';
+            if ($now < $start) {
+                $nextStatus = 'scheduled';
             }
         }
 
@@ -113,6 +123,42 @@ class Election
 
     public function updateElection(int $electionId, array $data): bool
     {
+        $current = $this->getElection($electionId);
+        if (!$current) {
+            return false;
+        }
+        $newStatus = isset($data['status']) ? (string)$data['status'] : null;
+        if ($newStatus !== null && !in_array($newStatus, ['draft', 'scheduled', 'active', 'closed'], true)) {
+            return false;
+        }
+        $now = time();
+        $start = strtotime((string)($data['start_time'] ?? $current['start_time']));
+        $end = strtotime((string)($data['end_time'] ?? $current['end_time']));
+        if ($start === false || $end === false || $start >= $end) {
+            return false;
+        }
+        $locked = $this->isBallotLocked($electionId);
+        $hasNonStatusChanges = isset($data['title']) || isset($data['description']) || isset($data['start_time']) || isset($data['end_time']);
+        if ($locked && $hasNonStatusChanges) {
+            return false;
+        }
+        if ($locked && $newStatus !== null && $newStatus !== $current['status'] && $newStatus !== 'closed') {
+            $openingOnSchedule = in_array($current['status'], ['draft', 'scheduled'], true)
+                && $newStatus === 'active' && $start <= $now && $end > $now && !$this->hasElectionVotes($electionId);
+            $reopeningWithinWindow = $current['status'] === 'closed' && $newStatus === 'active'
+                && $start <= $now && $end > $now;
+            $correctingPrematureActivation = $current['status'] === 'active' && $newStatus === 'scheduled'
+                && $start > $now && !$this->hasElectionVotes($electionId);
+            if (!$openingOnSchedule && !$reopeningWithinWindow && !$correctingPrematureActivation) {
+                return false;
+            }
+        }
+        if ($newStatus === 'active' && ($start > $now || $end <= $now)) {
+            return false;
+        }
+        if ($newStatus === 'closed' && $current['status'] !== 'active' && $end > $now) {
+            return false;
+        }
         $updates = [];
         $params = ['id' => $electionId];
         if (isset($data['title'])) {
@@ -140,13 +186,68 @@ class Election
         }
         $sql = 'UPDATE elections SET ' . implode(', ', $updates) . ' WHERE id = :id';
         $stmt = $this->db->getConnection()->prepare($sql);
-        return $stmt->execute($params);
+        $updated = $stmt->execute($params);
+        if ($updated && $newStatus === 'active') {
+            $this->snapshotEligibleVoters($electionId);
+        }
+        return $updated;
     }
 
     public function deleteElection(int $electionId): bool
     {
+        if ($this->hasElectionVotes($electionId)) {
+            return false;
+        }
         $stmt = $this->db->getConnection()->prepare('DELETE FROM elections WHERE id = :id');
-        return $stmt->execute(['id' => $electionId]);
+        $stmt->execute(['id' => $electionId]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function hasElectionVotes(int $electionId): bool
+    {
+        $stmt = $this->db->getConnection()->prepare('SELECT 1 FROM votes WHERE election_id = :election_id LIMIT 1');
+        $stmt->execute(['election_id' => $electionId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    public function hasCandidateVotes(int $candidateId): bool
+    {
+        $stmt = $this->db->getConnection()->prepare('SELECT 1 FROM votes WHERE candidate_id = :candidate_id LIMIT 1');
+        $stmt->execute(['candidate_id' => $candidateId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    public function isBallotLocked(int $electionId): bool
+    {
+        $election = $this->getElection($electionId);
+        if (!$election) {
+            return true;
+        }
+        return in_array($election['status'], ['active', 'closed'], true)
+            || strtotime((string)$election['start_time']) <= time()
+            || $this->hasElectionVotes($electionId);
+    }
+
+    public function isElectionOpen(int $electionId): bool
+    {
+        $stmt = $this->db->getConnection()->prepare("SELECT 1 FROM elections WHERE id = :id AND status = 'active' AND start_time <= NOW() AND end_time > NOW() LIMIT 1");
+        $stmt->execute(['id' => $electionId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    public function isResultsPublished(int $electionId): bool
+    {
+        $stmt = $this->db->getConnection()->prepare("SELECT 1 FROM elections WHERE id = :id AND status = 'closed' LIMIT 1");
+        $stmt->execute(['id' => $electionId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    private function snapshotEligibleVoters(int $electionId): void
+    {
+        $pdo = $this->db->getConnection();
+        $this->ensureColumn($pdo, 'elections', 'eligible_voter_count', 'INT UNSIGNED NULL DEFAULT NULL');
+        $stmt = $pdo->prepare("UPDATE elections SET eligible_voter_count = (SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'active') WHERE id = :id AND eligible_voter_count IS NULL");
+        $stmt->execute(['id' => $electionId]);
     }
 
     // ===== ELECTION POSITION MANAGEMENT =====
@@ -155,9 +256,13 @@ class Election
     {
         $pdo = $this->db->getConnection();
         $this->ensureElectionSchema($pdo);
+        $electionId = (int)($data['election_id'] ?? 0);
+        if ($electionId <= 0 || $this->isBallotLocked($electionId)) {
+            throw new RuntimeException('Election positions cannot be changed after voting starts.');
+        }
         $stmt = $pdo->prepare('INSERT INTO election_positions (election_id, position_name, description, display_order) VALUES (:election_id, :position_name, :description, :display_order)');
         $stmt->execute([
-            'election_id' => $data['election_id'] ?? 0,
+            'election_id' => $electionId,
             'position_name' => $data['position_name'] ?? '',
             'description' => $data['description'] ?? '',
             'display_order' => $data['display_order'] ?? 0,
@@ -221,6 +326,7 @@ class Election
         $this->ensureColumn($pdo, 'election_positions', 'description', 'TEXT');
         $this->ensureColumn($pdo, 'election_positions', 'display_order', 'INT DEFAULT 0');
         $this->ensureColumn($pdo, 'elections', 'description', 'TEXT');
+        $this->ensureColumn($pdo, 'elections', 'eligible_voter_count', 'INT UNSIGNED NULL DEFAULT NULL');
         $this->ensureColumn($pdo, 'candidates', 'image_path', 'VARCHAR(255)');
         $this->ensureColumn($pdo, 'candidates', 'image_upload_date', 'DATETIME');
         $this->ensureColumn($pdo, 'candidates', 'approved', 'TINYINT(1) DEFAULT 0');
@@ -258,6 +364,10 @@ class Election
 
     public function updatePosition(int $positionId, array $data, ?int $electionId = null): bool
     {
+        $position = $this->getPosition($positionId);
+        if (!$position || ($electionId !== null && (int)$position['election_id'] !== $electionId) || $this->isBallotLocked((int)$position['election_id'])) {
+            return false;
+        }
         $updates = [];
         $params = ['id' => $positionId];
         $scope = '';
@@ -287,6 +397,10 @@ class Election
 
     public function deletePosition(int $positionId, ?int $electionId = null): bool
     {
+        $position = $this->getPosition($positionId);
+        if (!$position || ($electionId !== null && (int)$position['election_id'] !== $electionId) || $this->isBallotLocked((int)$position['election_id'])) {
+            return false;
+        }
         $sql = 'DELETE FROM election_positions WHERE id = :id';
         $params = ['id' => $positionId];
         if ($electionId !== null) {
@@ -303,18 +417,22 @@ class Election
     {
         $pdo = $this->db->getConnection();
         $this->ensureElectionSchema($pdo);
+        $electionId = (int)($data['election_id'] ?? 0);
+        if ($electionId <= 0 || $this->isBallotLocked($electionId)) {
+            throw new RuntimeException('Candidates cannot be changed after voting starts.');
+        }
 
         $positionId = 0;
         $positionName = trim((string)($data['position_name'] ?? ''));
         if ($positionName !== '') {
-            $positionId = $this->getOrCreatePositionByName((int)$data['election_id'], $positionName);
+            $positionId = $this->getOrCreatePositionByName($electionId, $positionName);
         } elseif (!empty($data['position_id'])) {
             $positionId = (int)$data['position_id'];
         }
 
         $stmt = $pdo->prepare('INSERT INTO candidates (election_id, position_id, student_id, manifesto, image_path, approved) VALUES (:election_id, :position_id, :student_id, :manifesto, :image_path, :approved)');
         $stmt->execute([
-            'election_id' => $data['election_id'] ?? 0,
+            'election_id' => $electionId,
             'position_id' => $positionId,
             'student_id' => $data['student_id'] ?? 0,
             'manifesto' => $data['manifesto'] ?? '',
@@ -351,6 +469,10 @@ class Election
 
     public function updateCandidate(int $candidateId, array $data, ?int $electionId = null): bool
     {
+        $candidate = $this->getCandidate($candidateId);
+        if (!$candidate || ($electionId !== null && (int)$candidate['election_id'] !== $electionId) || $this->isBallotLocked((int)$candidate['election_id'])) {
+            return false;
+        }
         $updates = [];
         $params = ['id' => $candidateId];
         $scope = '';
@@ -385,6 +507,11 @@ class Election
 
     public function deleteCandidate(int $candidateId, ?int $electionId = null): bool
     {
+        $candidate = $this->getCandidate($candidateId);
+        if (!$candidate || ($electionId !== null && (int)$candidate['election_id'] !== $electionId)
+            || $this->isBallotLocked((int)$candidate['election_id']) || $this->hasCandidateVotes($candidateId)) {
+            return false;
+        }
         $sql = 'DELETE FROM candidates WHERE id = :id';
         $params = ['id' => $candidateId];
         if ($electionId !== null) {
@@ -397,6 +524,9 @@ class Election
 
     public function getOrCreatePositionByName(int $electionId, string $positionName): int
     {
+        if ($this->isBallotLocked($electionId)) {
+            throw new RuntimeException('Election positions cannot be changed after voting starts.');
+        }
         $pdo = $this->db->getConnection();
         $stmt = $pdo->prepare('SELECT id FROM election_positions WHERE election_id = :election_id AND position_name = :position_name LIMIT 1');
         $stmt->execute(['election_id' => $electionId, 'position_name' => $positionName]);
@@ -414,7 +544,19 @@ class Election
     public function recordVote(int $electionId, int $positionId, int $candidateId, int $studentId): bool
     {
         $pdo = $this->db->getConnection();
+        $ownsTransaction = !$pdo->inTransaction();
         try {
+            if ($ownsTransaction) {
+                $pdo->beginTransaction();
+            }
+            $electionLock = $pdo->prepare('SELECT id FROM elections WHERE id = :election_id FOR UPDATE');
+            $electionLock->execute(['election_id' => $electionId]);
+            if (!$electionLock->fetchColumn()) {
+                if ($ownsTransaction) {
+                    $pdo->rollBack();
+                }
+                return false;
+            }
             $validation = $pdo->prepare(
                 "SELECT e.id
                  FROM elections e
@@ -431,18 +573,28 @@ class Election
                 'student_id' => $studentId,
             ]);
             if (!$validation->fetchColumn()) {
+                if ($ownsTransaction) {
+                    $pdo->rollBack();
+                }
                 return false;
             }
 
             $stmt = $pdo->prepare('INSERT INTO votes (election_id, position_id, candidate_id, student_id) VALUES (:election_id, :position_id, :candidate_id, :student_id)');
-            return $stmt->execute([
+            $recorded = $stmt->execute([
                 'election_id' => $electionId,
                 'position_id' => $positionId,
                 'candidate_id' => $candidateId,
                 'student_id' => $studentId,
             ]);
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+            return $recorded;
         } catch (PDOException $e) {
             // Unique constraint violation - student already voted for this position
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             return false;
         }
     }
@@ -471,14 +623,21 @@ class Election
 
     public function getElectionResults(int $electionId, bool $approvedOnly = false): array
     {
+        if (!$this->isResultsPublished($electionId)) {
+            return [];
+        }
         $results = [];
         $positions = $this->listPositions($electionId);
         foreach ($positions as $position) {
-            $candidates = $this->listCandidates($electionId, (int)$position['id'], $approvedOnly);
+            // Keep legacy votes visible even if a candidate was later unapproved.
+            $candidates = $this->listCandidates($electionId, (int)$position['id'], false);
             $candidateResults = [];
             $totalVotes = 0;
             foreach ($candidates as $candidate) {
                 $voteCount = $this->getCandidateVoteCount((int)$candidate['id']);
+                if ($approvedOnly && (int)$candidate['approved'] !== 1 && $voteCount === 0) {
+                    continue;
+                }
                 $totalVotes += $voteCount;
                 $candidateResults[] = [
                     'id' => $candidate['id'],
@@ -512,12 +671,30 @@ class Election
     public function getElectionStats(int $electionId): array
     {
         $pdo = $this->db->getConnection();
-        $totalStudents = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'active'")->fetchColumn();
-        $totalVotes = (int)$pdo->query("SELECT COUNT(DISTINCT student_id) FROM votes WHERE election_id = $electionId")->fetchColumn();
+        $this->ensureColumn($pdo, 'elections', 'eligible_voter_count', 'INT UNSIGNED NULL DEFAULT NULL');
+        $electionStmt = $pdo->prepare('SELECT status, eligible_voter_count FROM elections WHERE id = :id');
+        $electionStmt->execute(['id' => $electionId]);
+        $election = $electionStmt->fetch();
+        if (!$election) {
+            return ['total_registered_voters' => 0, 'eligible_voters' => 0, 'total_votes_cast' => 0, 'unique_voters' => 0, 'voter_turnout_percentage' => 0];
+        }
+        if ($election['eligible_voter_count'] === null && in_array($election['status'], ['active', 'closed'], true)) {
+            $this->snapshotEligibleVoters($electionId);
+            $electionStmt->execute(['id' => $electionId]);
+            $election = $electionStmt->fetch();
+        }
+        $eligibleVoters = (int)($election['eligible_voter_count'] ?? 0);
+        $voteStmt = $pdo->prepare('SELECT COUNT(*) AS ballots, COUNT(DISTINCT student_id) AS voters FROM votes WHERE election_id = :election_id');
+        $voteStmt->execute(['election_id' => $electionId]);
+        $counts = $voteStmt->fetch() ?: ['ballots' => 0, 'voters' => 0];
+        $uniqueVoters = (int)$counts['voters'];
+        $ballots = (int)$counts['ballots'];
         return [
-            'total_registered_voters' => $totalStudents,
-            'total_votes_cast' => $totalVotes,
-            'voter_turnout_percentage' => $totalStudents > 0 ? round(($totalVotes / $totalStudents) * 100, 2) : 0,
+            'total_registered_voters' => $eligibleVoters,
+            'eligible_voters' => $eligibleVoters,
+            'total_votes_cast' => $ballots,
+            'unique_voters' => $uniqueVoters,
+            'voter_turnout_percentage' => $eligibleVoters > 0 ? round(($uniqueVoters / $eligibleVoters) * 100, 2) : 0,
         ];
     }
 
@@ -526,6 +703,9 @@ class Election
         $election = $this->getElection($electionId);
         if (!$election) {
             return '<p>Election not found.</p>';
+        }
+        if (!$this->isResultsPublished($electionId)) {
+            return '<p>Results are not available until the election is closed.</p>';
         }
 
         $results = $this->getElectionResults($electionId);
@@ -550,7 +730,7 @@ class Election
             }
         }
         $html .= '</table>';
-        $html .= '<p><strong>Total Votes Cast:</strong> ' . (int)$stats['total_votes_cast'] . '</p>';
+        $html .= '<p><strong>Ballots Cast:</strong> ' . (int)$stats['total_votes_cast'] . '</p>';
         return $html;
     }
 
@@ -564,7 +744,7 @@ class Election
     {
         $mailer = new Mailer($this->db);
         $election = $this->getElection($electionId);
-        if (!$election) {
+        if (!$election || !$this->isResultsPublished($electionId)) {
             return false;
         }
 

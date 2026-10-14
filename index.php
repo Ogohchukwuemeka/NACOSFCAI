@@ -132,8 +132,8 @@ $faqs = [
             <div class="col-sm-6 col-lg-3" data-aos="fade-up" data-aos-delay="200">
                 <div class="glass-card stat-card">
                     <i data-lucide="folder-open" class="stat-icon"></i>
-                    <h3 class="counter" data-target="<?= $dashboardStats['resources'] ?>"><?= $dashboardStats['resources'] ?></h3>
-                    <p>Resources</p>
+                    <h3 class="counter" data-target="<?= (int)$dashboardStats['resources'] ?>"><?= number_format((int)$dashboardStats['resources']) ?></h3>
+                    <p>Resources Uploaded</p>
                 </div>
             </div>
             <div class="col-sm-6 col-lg-3" data-aos="fade-up" data-aos-delay="300">

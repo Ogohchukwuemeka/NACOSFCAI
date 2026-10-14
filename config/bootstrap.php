@@ -1,4 +1,8 @@
 <?php
+if (ob_get_level() === 0) {
+    ob_start();
+}
+
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
 ini_set('session.cookie_httponly', '1');
@@ -41,10 +45,6 @@ if (!empty($_SESSION['user_id']) && !empty($_SESSION['last_activity'])) {
         session_regenerate_id(true);
         $_SESSION['session_expired'] = true;
     }
-}
-
-if (!empty($_SESSION['user_id'])) {
-    $_SESSION['last_activity'] = time();
 }
 
 if (!defined('APP_ROOT')) {

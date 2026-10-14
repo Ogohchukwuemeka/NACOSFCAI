@@ -9,7 +9,7 @@ class Auth
         $this->db = $db;
     }
 
-    public function login(string $identifier, string $password, string $role): bool
+    public function login(string $identifier, string $password, string $role = 'auto'): bool
     {
         $stmt = $this->db->getConnection()->prepare('SELECT * FROM users WHERE (email = :email OR matric_number = :matric_number) LIMIT 1');
         $stmt->execute(['email' => $identifier, 'matric_number' => $identifier]);
@@ -18,15 +18,17 @@ class Auth
             return false;
         }
 
-        if ($role === 'student' && ($user['status'] ?? 'pending') !== 'active') {
-            $_SESSION['login_error'] = ($user['status'] ?? '') === 'pending'
-                ? 'Your registration is awaiting admin approval.'
-                : 'Your student account is not active. Please contact an administrator.';
+        $userRole = $user['role'] ?? 'student';
+        if (!in_array($userRole, ['student', 'admin'], true) || ($role !== 'auto' && $role !== $userRole)) {
             return false;
         }
 
-        $userRole = $user['role'] ?? 'student';
-        if ($role === 'admin' && $userRole !== 'admin') {
+        if (($user['status'] ?? 'pending') !== 'active') {
+            if ($userRole === 'student') {
+                $_SESSION['login_error'] = ($user['status'] ?? '') === 'pending'
+                    ? 'Your registration is awaiting admin approval.'
+                    : 'Your student account is not active. Please contact an administrator.';
+            }
             return false;
         }
 
@@ -251,6 +253,10 @@ SQL
     public function logout(): void
     {
         session_unset();
+        if (ini_get('session.use_cookies')) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+        }
         session_destroy();
     }
 
@@ -304,13 +310,36 @@ SQL
 
     public function requireLogin(string $role = 'student'): void
     {
-        if (empty($_SESSION['user_id']) || $_SESSION['user_role'] !== $role) {
+        $accountUserId = (int)($_SESSION['account_user_id'] ?? 0);
+        $sessionRole = (string)($_SESSION['user_role'] ?? '');
+        $sessionValid = !empty($_SESSION['user_id']) && $accountUserId > 0 && in_array($sessionRole, ['student', 'admin'], true);
+
+        if ($sessionValid) {
+            $stmt = $this->db->getConnection()->prepare('SELECT role, status FROM users WHERE id = :id LIMIT 1');
+            $stmt->execute(['id' => $accountUserId]);
+            $account = $stmt->fetch();
+            $sessionValid = $account && $account['role'] === $sessionRole;
+            if ($sessionValid) {
+                $sessionValid = ($account['status'] ?? '') === 'active';
+            }
+        }
+
+        if (!$sessionValid) {
             if (!empty($_SESSION['session_expired'])) {
                 unset($_SESSION['session_expired']);
                 $_SESSION['login_error'] = 'Your session expired. Please log in again.';
             }
-            $loginPage = $role === 'admin' ? 'admin-login.php' : 'login.php';
-            header('Location: ' . APP_URL . '/auth/' . $loginPage);
+            unset($_SESSION['user_id'], $_SESSION['account_user_id'], $_SESSION['user_role'], $_SESSION['user_name']);
+            header('Location: ' . APP_URL . '/auth/login.php');
+            exit;
+        }
+
+        if (!in_array($role, ['student', 'admin'], true)) {
+            http_response_code(403);
+            exit('Forbidden');
+        }
+        if ($sessionRole !== $role) {
+            header('Location: ' . APP_URL . '/' . ($sessionRole === 'admin' ? 'admin/dashboard.php' : 'student/dashboard.php'));
             exit;
         }
 

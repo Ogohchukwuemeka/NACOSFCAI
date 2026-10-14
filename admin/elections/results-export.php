@@ -22,6 +22,11 @@ if (!$elec) {
     echo 'Election not found.';
     exit;
 }
+if (!$election->isResultsPublished($electionId)) {
+    http_response_code(403);
+    echo 'Final results are available only after the election is closed.';
+    exit;
+}
 
 if ($format === 'pdf') {
     $content = $election->generateResultsPdf($electionId);
